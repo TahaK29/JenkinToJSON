@@ -5,3 +5,4 @@ This is a test markdown file.
 - item 3
 - item 4
 - item 5
+- item 6
