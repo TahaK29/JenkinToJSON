@@ -102,47 +102,73 @@ pipeline {
             steps {
                 script {
                     echo "Converting watched.md to JSON using markdown-json..."
-                    
-                    // Use Docker to run Node.js and convert markdown to JSON
-                    // This ensures Node.js is available regardless of Jenkins setup
+                    // No Docker: Jenkins runs inside a container that has no Docker CLI.
+                    // Use standalone Node.js binary or fallback to simple JSON.
                     sh '''
-                        docker run --rm \
-                            -v "$(pwd):/workspace" \
-                            -w /workspace \
-                            node:20-alpine sh -c "
-                            echo 'Installing markdown-json package...'
-                            npm install markdown-json
-                            
-                            echo 'Setting up conversion...'
-                            mkdir -p temp_content
-                            cp watched.md temp_content/watched.md
-                            
-                            echo 'Converting markdown to JSON...'
-                            npx markdown-json -s temp_content -d watched.json -p 'watched.md' || {
-                                echo 'markdown-json conversion failed, using fallback...'
-                                node -e \"
-                                    const fs = require('fs');
-                                    const mdContent = fs.readFileSync('watched.md', 'utf8');
-                                    const jsonOutput = JSON.stringify({ 
-                                        filename: 'watched.md',
-                                        content: mdContent,
-                                        timestamp: new Date().toISOString()
-                                    }, null, 2);
-                                    fs.writeFileSync('watched.json', jsonOutput);
-                                \"
-                            }
-                            
-                            echo '=== JSON Output ==='
-                            if [ -f watched.json ]; then
-                                cat watched.json
+                        set -e
+                        if command -v node >/dev/null 2>&1; then
+                            echo "Using system Node.js: $(node --version)"
+                            NODE_CMD=node
+                            NPM_CMD=npm
+                            NPX_CMD=npx
+                        else
+                            echo "Node.js not found. Downloading standalone Node.js..."
+                            ARCH=$(uname -m)
+                            case "$ARCH" in
+                                x86_64) NODE_ARCH="x64" ;;
+                                aarch64|arm64) NODE_ARCH="arm64" ;;
+                                *) echo "Unsupported arch: $ARCH"; exit 1 ;;
+                            esac
+                            NODE_VERSION="v20.18.0"
+                            NODE_DIR="node-${NODE_VERSION}-linux-${NODE_ARCH}"
+                            NODE_TGZ="${NODE_DIR}.tar.gz"
+                            NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_TGZ}"
+                            if command -v curl >/dev/null 2>&1; then
+                                curl -fsSL "$NODE_URL" -o "$NODE_TGZ"
                             else
-                                echo 'Error: JSON file was not created'
-                                exit 1
+                                wget -q "$NODE_URL" -O "$NODE_TGZ"
                             fi
-                            
-                            # Cleanup
-                            rm -rf temp_content node_modules package-lock.json
-                        "
+                            tar -xzf "$NODE_TGZ"
+                            export PATH="$(pwd)/${NODE_DIR}/bin:$PATH"
+                            NODE_CMD=node
+                            NPM_CMD=npm
+                            NPX_CMD=npx
+                            echo "Using downloaded Node.js: $($NODE_CMD --version)"
+                        fi
+
+                        echo "Installing markdown-json package..."
+                        $NPM_CMD install markdown-json
+
+                        echo "Setting up conversion..."
+                        mkdir -p temp_content
+                        cp watched.md temp_content/watched.md
+
+                        echo "Converting markdown to JSON..."
+                        if $NPX_CMD markdown-json -s temp_content -d watched.json -p "watched.md" 2>/dev/null; then
+                            :
+                        else
+                            echo "markdown-json conversion failed, using fallback..."
+                            $NODE_CMD -e "
+                                const fs = require('fs');
+                                const mdContent = fs.readFileSync('watched.md', 'utf8');
+                                const jsonOutput = JSON.stringify({
+                                    filename: 'watched.md',
+                                    content: mdContent,
+                                    timestamp: new Date().toISOString()
+                                }, null, 2);
+                                fs.writeFileSync('watched.json', jsonOutput);
+                            "
+                        fi
+
+                        echo "=== JSON Output ==="
+                        if [ -f watched.json ]; then
+                            cat watched.json
+                        else
+                            echo "Error: JSON file was not created"
+                            exit 1
+                        fi
+
+                        rm -rf temp_content node_modules package-lock.json node-*.tar.gz node-v*
                     '''
                 }
             }
