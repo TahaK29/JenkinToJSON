@@ -46,15 +46,25 @@ pipeline {
                         
                         // Check if watched.md was changed
                         // Also check if this is a manual build (user triggered)
-                        def isManualBuild = currentBuild.rawBuild.getCause(hudson.model.Cause$UserCause) != null
+                        def isManualBuild = false
+                        try {
+                            def causes = currentBuild.rawBuild.getCauses()
+                            isManualBuild = causes.any { it instanceof hudson.model.Cause$UserCause }
+                        } catch (Exception e) {
+                            echo "Could not determine if manual build: ${e.getMessage()}"
+                        }
                         
-                        if (changedFiles == "FIRST_BUILD" || isManualBuild) {
+                        if (isManualBuild) {
+                            echo "Manual build triggered - will convert watched.md"
                             if (fileExists('watched.md')) {
-                                if (isManualBuild) {
-                                    echo "Manual build triggered - will convert watched.md"
-                                } else {
-                                    echo "First build - will convert watched.md"
-                                }
+                                env.SHOULD_CONVERT = 'true'
+                            } else {
+                                echo "watched.md not found"
+                                env.SHOULD_CONVERT = 'false'
+                            }
+                        } else if (changedFiles == "FIRST_BUILD") {
+                            if (fileExists('watched.md')) {
+                                echo "First build - will convert watched.md"
                                 env.SHOULD_CONVERT = 'true'
                             } else {
                                 echo "watched.md not found"
