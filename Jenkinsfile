@@ -144,8 +144,26 @@ pipeline {
                         cp watched.md temp_content/watched.md
 
                         echo "Converting markdown to JSON..."
-                        if $NPX_CMD markdown-json -s temp_content -d watched.json -p "watched.md" 2>/dev/null; then
-                            :
+                        # markdown-json -d expects a directory, creates output.json inside it
+                        mkdir -p output_dir
+                        if $NPX_CMD markdown-json -s temp_content -d output_dir -p "watched.md" 2>&1; then
+                            # Check for output file (markdown-json creates output.json in the dist directory)
+                            if [ -f "output_dir/output.json" ]; then
+                                cp output_dir/output.json watched.json
+                                echo "markdown-json conversion successful"
+                            else
+                                echo "markdown-json ran but output.json not found, using fallback..."
+                                $NODE_CMD -e "
+                                    const fs = require('fs');
+                                    const mdContent = fs.readFileSync('watched.md', 'utf8');
+                                    const jsonOutput = JSON.stringify({
+                                        filename: 'watched.md',
+                                        content: mdContent,
+                                        timestamp: new Date().toISOString()
+                                    }, null, 2);
+                                    fs.writeFileSync('watched.json', jsonOutput);
+                                "
+                            fi
                         else
                             echo "markdown-json conversion failed, using fallback..."
                             $NODE_CMD -e "
@@ -168,7 +186,7 @@ pipeline {
                             exit 1
                         fi
 
-                        rm -rf temp_content node_modules package-lock.json node-*.tar.gz node-v*
+                        rm -rf temp_content output_dir node_modules package-lock.json node-*.tar.gz node-v*
                     '''
                 }
             }
