@@ -6,3 +6,4 @@ This is a test markdown file.
 - item 4
 - item 5
 - item 6
+- Item 7
