@@ -12,39 +12,70 @@ pipeline {
             steps {
                 script {
                     try {
-                        // Get list of changed files in this commit
-                        def changedFiles = sh(
-                            script: '''
-                                if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
-                                    git diff --name-only HEAD~1 HEAD
-                                else
-                                    echo "FIRST_BUILD"
-                                fi
-                            ''',
+                        // Get previous build's commit SHA if it exists
+                        def previousBuild = currentBuild.getPreviousBuild()
+                        def currentCommit = sh(
+                            script: 'git rev-parse HEAD',
                             returnStdout: true
                         ).trim()
                         
-                        if (changedFiles == "FIRST_BUILD") {
+                        echo "Current commit: ${currentCommit}"
+                        
+                        // Get list of changed files
+                        def changedFiles = ""
+                        if (previousBuild == null) {
                             echo "First build detected - checking watched.md"
-                            if (fileExists('JenkinToJSON/watched.md')) {
+                            changedFiles = "FIRST_BUILD"
+                        } else {
+                            // Get previous commit from previous build
+                            def previousCommit = sh(
+                                script: 'git rev-parse HEAD~1',
+                                returnStdout: true
+                            ).trim()
+                            
+                            echo "Previous commit: ${previousCommit}"
+                            
+                            // Get changed files between commits
+                            changedFiles = sh(
+                                script: "git diff --name-only ${previousCommit} ${currentCommit}",
+                                returnStdout: true
+                            ).trim()
+                            
+                            echo "Changed files: ${changedFiles}"
+                        }
+                        
+                        // Check if watched.md was changed
+                        // Also check if this is a manual build (user triggered)
+                        def isManualBuild = currentBuild.rawBuild.getCause(hudson.model.Cause$UserCause) != null
+                        
+                        if (changedFiles == "FIRST_BUILD" || isManualBuild) {
+                            if (fileExists('watched.md')) {
+                                if (isManualBuild) {
+                                    echo "Manual build triggered - will convert watched.md"
+                                } else {
+                                    echo "First build - will convert watched.md"
+                                }
                                 env.SHOULD_CONVERT = 'true'
                             } else {
                                 echo "watched.md not found"
                                 env.SHOULD_CONVERT = 'false'
                             }
-                        } else if (changedFiles.contains('JenkinToJSON/watched.md')) {
+                        } else if (changedFiles.contains('watched.md')) {
                             echo "watched.md changed - will convert to JSON"
                             env.SHOULD_CONVERT = 'true'
                         } else {
                             echo "watched.md not changed, skipping"
+                            echo "Files that changed: ${changedFiles}"
                             env.SHOULD_CONVERT = 'false'
                             currentBuild.result = 'SUCCESS'
                             return
                         }
                     } catch (Exception e) {
                         echo "Error checking changes: ${e.getMessage()}"
+                        echo "Stack trace: ${e.getStackTrace().join('\\n')}"
                         // Fallback: always convert watched.md if check fails
-                        if (fileExists('JenkinToJSON/watched.md')) {
+                        if (fileExists('watched.md')) {
+                            echo "Fallback: converting watched.md due to error"
                             env.SHOULD_CONVERT = 'true'
                         } else {
                             env.SHOULD_CONVERT = 'false'
@@ -74,14 +105,14 @@ pipeline {
                             
                             echo 'Setting up conversion...'
                             mkdir -p temp_content
-                            cp JenkinToJSON/watched.md temp_content/watched.md
+                            cp watched.md temp_content/watched.md
                             
                             echo 'Converting markdown to JSON...'
                             npx markdown-json -s temp_content -d watched.json -p 'watched.md' || {
                                 echo 'markdown-json conversion failed, using fallback...'
                                 node -e \"
                                     const fs = require('fs');
-                                    const mdContent = fs.readFileSync('JenkinToJSON/watched.md', 'utf8');
+                                    const mdContent = fs.readFileSync('watched.md', 'utf8');
                                     const jsonOutput = JSON.stringify({ 
                                         filename: 'watched.md',
                                         content: mdContent,
